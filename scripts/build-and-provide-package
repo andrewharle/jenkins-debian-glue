@@ -52,8 +52,13 @@ set_debootstrap() {
       ;;
   esac
 
+  # cross build is performed with the debootstrap on host architecture
+  if [ -n "${CROSS_BUILD:-}" ] ; then
+    DEBOOTSTRAP="debootstrap"
+    return 0
+  
   # otherwise assume we're building for a foreign architecture
-  if [ -x "$(which qemu-debootstrap)" ] ; then
+  elif [ -x "$(which qemu-debootstrap)" ] ; then
     DEBOOTSTRAP="qemu-debootstrap"
   else
     echo "Error: qemu-debootstrap not available, please install qemu-user-static." >&2
@@ -263,6 +268,21 @@ dist_and_arch_settings() {
     echo "*** architecture is set to ${architecture} ***"
   fi
 
+  # Crossbuild definitions
+  # For the env call, that prefixes the cowbuilder commands, architecture is the build_architecture
+  # A distinction is made for the %architecture parameter as follows:
+  # build_architecture is the ARCH of the build system (chroot).
+  # host_architecture is the ARCH of the produced executable objects (package). This is, in fact, an alias of arch.
+  host_architecture="${arch}"
+
+  if [ -n "${CROSS_BUILD:-}" ]; then 
+    build_arch="${HOST_ARCH}"
+    build_architecture="${HOST_ARCH}"
+  else
+    build_arch="${arch}"
+    build_architecture="${arch}"
+  fi
+
   if [ -n "${distribution:-}" ] ; then
     local DIST="${distribution}"
   else
@@ -284,11 +304,11 @@ dist_and_arch_settings() {
   if [ -n "${COWBUILDER_BASE:-}" ] ; then
     echo "*** COWBUILDER_BASE is set to $COWBUILDER_BASE - using as cowbuilder base.cow ***"
   else
-    COWBUILDER_BASE="/var/cache/pbuilder/base-${COWBUILDER_DIST}-${arch}.cow"
+    COWBUILDER_BASE="/var/cache/pbuilder/base-${COWBUILDER_DIST}-${build_arch}.cow"
     echo "*** No COWBUILDER_BASE set, using $COWBUILDER_BASE as cowbuilder base.cow ***"
   fi
 
-  local lockfiles="/var/run/lock/${COWBUILDER_DIST}-${arch}"
+  local lockfiles="/var/run/lock/${COWBUILDER_DIST}-${build_arch}"
   build_lockfile="${lockfiles}.building.$$"
   update_lockfile="${lockfiles}.update"
   update_lockfile_pid="${lockfiles}.update.$$"
@@ -399,11 +419,11 @@ cowbuilder_init() {
   touch "${update_lockfile_pid}"
 
   if [ ! -d "${COWBUILDER_BASE}" ]; then
-    echo "*** Creating cowbuilder base $COWBUILDER_BASE for arch $arch and distribution $COWBUILDER_DIST ***"
-    sudo DIST="${distribution:-}" ARCH="${architecture:-}" ${ADT:+ADT=$ADT} \
+    echo "*** Creating cowbuilder base $COWBUILDER_BASE for arch $build_arch and distribution $COWBUILDER_DIST ***"
+    sudo DIST="${distribution:-}" ARCH="${build_architecture:-}" ${ADT:+ADT=$ADT} \
       cowbuilder --create --basepath "${COWBUILDER_BASE}" --distribution "${COWBUILDER_DIST}" \
-         --debootstrap "${DEBOOTSTRAP}" --architecture "${architecture:-}" \
-         --debootstrapopts --arch --debootstrapopts "$arch" \
+         --debootstrap "${DEBOOTSTRAP}" --architecture "${build_architecture:-}" \
+         --debootstrapopts --arch --debootstrapopts "$build_arch" \
          --debootstrapopts --variant=buildd --configfile="${pbuilderrc}" \
          --hookdir "${PBUILDER_HOOKDIR}"
     [ $? -eq 0 ] || exit 2
@@ -412,7 +432,7 @@ cowbuilder_init() {
       echo "*** Skipping cowbuilder update as requested via SKIP_COWBUILDER_UPDATE ***"
     else
       echo "*** Updating cowbuilder cow base ***"
-      sudo DIST="${distribution:-}" ARCH="${architecture:-}" ${ADT:+ADT=$ADT} \
+      sudo DIST="${distribution:-}" ARCH="${build_architecture:-}" ${ADT:+ADT=$ADT} \
         cowbuilder --update --basepath "${COWBUILDER_BASE}" --configfile="${pbuilderrc}"
       [ $? -eq 0 ] || exit 3
     fi
@@ -774,17 +794,19 @@ EOF
 
   case "$architecture" in
     i386)
-      linux32 sudo DIST="${distribution:-}" ARCH="${architecture:-}" ${ADT:+ADT=$ADT} \
+      linux32 sudo DIST="${distribution:-}" ARCH="${build_architecture:-}" ${ADT:+ADT=$ADT} \
         cowbuilder --buildresult "$WORKSPACE"/binaries/ \
         --build $sourcefile \
+        --host-arch "${host_architecture}" \
         --basepath "${COWBUILDER_BASE}" --debbuildopts "${DEBBUILDOPTS:-}" \
         --hookdir "${PBUILDER_HOOKDIR}" --bindmounts "$BINDMOUNTS" --configfile="${pbuilderrc}"
       [ $? -eq 0 ] || bailout 1 "Error: Failed to build with cowbuilder."
       ;;
     amd64|all|*)
-      sudo DIST="${distribution:-}" ARCH="${architecture:-}" ${ADT:+ADT=$ADT} \
+      sudo DIST="${distribution:-}" ARCH="${build_architecture:-}" ${ADT:+ADT=$ADT} \
         cowbuilder --buildresult "$WORKSPACE"/binaries/ \
         --build $sourcefile \
+        --host-arch "${host_architecture}" \
         --basepath "${COWBUILDER_BASE}" --debbuildopts "${DEBBUILDOPTS:-}" \
         --hookdir "${PBUILDER_HOOKDIR}" --bindmounts "$BINDMOUNTS" --configfile="${pbuilderrc}"
       [ $? -eq 0 ] || bailout 1 "Error: Failed to build with cowbuilder."
